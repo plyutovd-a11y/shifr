@@ -140,7 +140,22 @@ class EncryptTab(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree.itemChanged.connect(self._on_check)
         self.tree.currentItemChanged.connect(self._on_current)
-        split.addWidget(self.tree)
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.tree, 1)
+        lr = QHBoxLayout()
+        b_all_on = QPushButton("Отметить всё")
+        b_all_on.setToolTip("Зашифровать весь текст презентации (каждый абзац целиком)")
+        b_all_on.clicked.connect(self.mark_all)
+        b_all_off = QPushButton("Снять всё")
+        b_all_off.setToolTip("Снять все отметки")
+        b_all_off.clicked.connect(self.clear_all)
+        lr.addWidget(b_all_on)
+        lr.addWidget(b_all_off)
+        lr.addStretch()
+        ll.addLayout(lr)
+        split.addWidget(left)
 
         right = QWidget()
         rl = QVBoxLayout(right)
@@ -344,6 +359,21 @@ class EncryptTab(QWidget):
         self._add(found)
         n = sum(len(v) for v in found.values())
         self.counter.setText(self.counter.text() + f"   (найдено «{needle.strip()}»: {n})")
+
+    def mark_all(self):
+        if not self.doc:
+            return
+        for it in self.doc.visible_items(not self.cb_notes.isChecked()):
+            self.sel[it.id] = [(0, len(it.text))]
+        self._rebuild_tree()
+        self._on_current()
+
+    def clear_all(self):
+        if not self.doc:
+            return
+        self.sel.clear()
+        self._rebuild_tree()
+        self._on_current()
 
     def clear_current(self):
         it = self._current_item()
