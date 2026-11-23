@@ -172,8 +172,10 @@ def test_damaged_and_missing_with_vault(src, tmp_path):
     doc = Document(out)
     # «ИИ» испортил один фрагмент и удалил другой
     hit = [it for it in doc.items if crypto.OPEN in it.text]
-    seg = next(s for s in hit[0].segments if s is not None and crypto.SEP in (s.text or ""))
-    i = seg.text.index(crypto.SEP) + 2
+    segs = [s for s in hit[0].segments if s is not None]
+    h = next(i for i, s in enumerate(segs) if crypto.SEP in (s.text or ""))
+    seg = next(s for s in segs[h + 1 :] if any(c.isalpha() for c in (s.text or "")))
+    i = next(k for k, c in enumerate(seg.text) if c.isalpha())
     seg.text = seg.text[:i] + ("Щ" if seg.text[i] != "Щ" else "Ж") + seg.text[i + 1 :]
     for s in hit[-1].segments:
         if s is not None:
@@ -208,3 +210,19 @@ def test_libreoffice_resave(src, tmp_path):
     after = set(texts(dec))
     for s in SECRETS:
         assert any(s in t for t in after), s
+
+
+def test_marker_parts_are_tiny(src, tmp_path):
+    key, _, out = encrypt(src, tmp_path)
+    prs = Presentation(str(out))
+    small, big = 0, 0
+    for slide in prs.slides:
+        for r in slide.part._element.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}r"):
+            txt = r.findtext("{http://schemas.openxmlformats.org/drawingml/2006/main}t") or ""
+            if crypto.OPEN in txt or crypto.CLOSE in txt:
+                rpr = r.find("{http://schemas.openxmlformats.org/drawingml/2006/main}rPr")
+                if rpr is not None and rpr.get("sz") == "100" and len(txt.strip(crypto.OPEN + crypto.CLOSE + crypto.SEP + crypto.B32)) == 0:
+                    small += 1
+                else:
+                    big += 1
+    assert small > 0 and big == 0

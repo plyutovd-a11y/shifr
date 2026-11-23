@@ -1,6 +1,7 @@
 """Работа с .pptx: поиск текста, шифрование выбранных фрагментов, расшифровка, очистка."""
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +63,18 @@ class Item:
             if seg is not None:
                 seg.text = "".join(cs)
 
+    def paragraphs(self):
+        out = []
+        for seg in self.segments:
+            if seg is None:
+                continue
+            node = seg
+            while node is not None and _local(node) != "p":
+                node = node.getparent()
+            if node is not None and etree.QName(node).namespace == NS["a"] and node not in out:
+                out.append(node)
+        return out
+
     def char_map(self):
         """Список символов по сегментам и отображение позиции -> (сегмент, смещение)."""
         chars, pos = [], []
@@ -80,6 +93,49 @@ class Report:
     missing: list[dict] = field(default_factory=list)  # {id, where, text}
     fragments: int = 0
     vault: dict = field(default_factory=dict)
+
+
+# Служебные части метки (⟦номер· и ⟧) пишутся отдельными фрагментами шрифтом 1 pt,
+# чтобы почти не занимать места на слайде.
+MARKER_SZ = "100"
+_MARK_PIECE_RE = re.compile("(%s[%s%s]+[·•∙:|]|%s)" % (crypto.OPEN, crypto.B32, crypto.B32.lower(), crypto.CLOSE))
+
+
+def _shrink_markers(par):
+    for r in list(par.findall(A + "r")):
+        t = r.find(A + "t")
+        if t is None or not t.text or not _MARK_PIECE_RE.search(t.text):
+            continue
+        pieces = [x for x in _MARK_PIECE_RE.split(t.text) if x]
+        if len(pieces) == 1 and _MARK_PIECE_RE.fullmatch(pieces[0]) and _is_small(r):
+            continue
+        anchor = r
+        for piece in pieces:
+            nr = copy.deepcopy(r)
+            nr.find(A + "t").text = piece
+            if _MARK_PIECE_RE.fullmatch(piece):
+                rpr = nr.find(A + "rPr")
+                if rpr is None:
+                    rpr = etree.SubElement(nr, A + "rPr")
+                    nr.remove(rpr)
+                    nr.insert(0, rpr)
+                rpr.set("sz", MARKER_SZ)
+            anchor.addnext(nr)
+            anchor = nr
+        par.remove(r)
+
+
+def _is_small(r) -> bool:
+    rpr = r.find(A + "rPr")
+    return rpr is not None and rpr.get("sz") == MARKER_SZ
+
+
+def _drop_empty_runs(par):
+    runs = par.findall(A + "r")
+    for r in runs:
+        t = r.find(A + "t")
+        if t is not None and not t.text and len(par.findall(A + "r")) > 1:
+            par.remove(r)
 
 
 class WrongKeyError(Exception):
@@ -257,6 +313,8 @@ class Document:
                 chars[si][oi] = chars[si][oi] + tail
                 rep.vault[fid] = {"text": text[s:e], "where": it.where}
             it.write(chars)
+            for par in it.paragraphs():
+                _shrink_markers(par)
         rep.fragments = frag_id
 
         self._sanitize(rep, remove_notes, remove_alt_text)
@@ -404,6 +462,8 @@ class Document:
 
         for it, chars in pending:
             it.write(chars)
+            for par in it.paragraphs():
+                _drop_empty_runs(par)
 
         if vault:
             for fid in sorted(set(vault) - found_ids):
