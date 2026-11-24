@@ -139,6 +139,7 @@ class EncryptTab(QWidget):
         self.tree.setHeaderLabels(["Текст (галочка — зашифровать абзац целиком)"])
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree.itemChanged.connect(self._on_check)
+        self.tree.itemClicked.connect(self._on_group_click)
         self.tree.currentItemChanged.connect(self._on_current)
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -246,6 +247,10 @@ class EncryptTab(QWidget):
                 groups[g] = QTreeWidgetItem(self.tree, [g])
                 groups[g].setFlags(Qt.ItemIsEnabled)
                 groups[g].setExpanded(True)
+                groups[g].setToolTip(0, "Щёлкните, чтобы отметить или снять все поля этого слайда")
+                f = groups[g].font(0)
+                f.setBold(True)
+                groups[g].setFont(0, f)
             label = it.where.split(" · ", 1)[1] if it.slide and " · " in it.where else it.where
             node = QTreeWidgetItem(groups[g])
             node.setData(0, ID_ROLE, it.id)
@@ -253,8 +258,45 @@ class EncryptTab(QWidget):
             node.setToolTip(0, f"{it.where}\n\n{it.text}")
             self._tree_items[it.id] = node
             self._paint_node(node, it, label)
+        for gnode in groups.values():
+            self._paint_group(gnode)
         self._updating = False
         self._update_counter()
+
+    def _is_full(self, it) -> bool:
+        ranges = self.sel.get(it.id, [])
+        return bool(ranges) and Document._normalize(it.text, ranges) == Document._normalize(it.text, [(0, len(it.text))])
+
+    def _group_children(self, gnode):
+        return [gnode.child(i) for i in range(gnode.childCount())]
+
+    def _paint_group(self, gnode):
+        kids = [self.doc.item(c.data(0, ID_ROLE)) for c in self._group_children(gnode)]
+        full = sum(self._is_full(it) for it in kids)
+        any_sel = any(self.sel.get(it.id) for it in kids)
+        if kids and full == len(kids):
+            state = Qt.Checked
+        elif any_sel:
+            state = Qt.PartiallyChecked
+        else:
+            state = Qt.Unchecked
+        gnode.setCheckState(0, state)
+
+    def _on_group_click(self, gnode, _col):
+        # Щелчок по названию слайда (или его галочке): отметить все поля слайда или снять все.
+        if gnode.data(0, ID_ROLE) is not None or not self.doc:
+            return
+        kids = [self.doc.item(c.data(0, ID_ROLE)) for c in self._group_children(gnode)]
+        if not kids:
+            return
+        if all(self._is_full(it) for it in kids):
+            for it in kids:
+                self.sel.pop(it.id, None)
+        else:
+            for it in kids:
+                self.sel[it.id] = [(0, len(it.text))]
+        for it in kids:
+            self._refresh(it.id)
 
     def _paint_node(self, node, it, label=None):
         ranges = self.sel.get(it.id, [])
@@ -313,6 +355,8 @@ class EncryptTab(QWidget):
         node = self._tree_items.get(item_id)
         if node is not None:
             self._paint_node(node, self.doc.item(item_id))
+            if node.parent() is not None:
+                self._paint_group(node.parent())
         self._updating = False
         cur = self._current_item()
         if cur is not None and cur.id == item_id:
